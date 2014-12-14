@@ -275,7 +275,7 @@ extern stack_err_e stack_push(stack_t *stack_p,
  * @param[in,out] entry_size_p
  *     Initially, must be set to size, in bytes, of entry_p buffer.
  *     On success, will be updated with number of bytes copied to
- *     entry_p. The inital value is ignored if entry_p is NULL.
+ *     entry_p. The initial value is ignored if entry_p is NULL.
  * @retval STACK_E_OK
  *     Successfully removed top entry from stack.
  * @retval STACK_E_BUF_OVERFLOW
@@ -334,7 +334,7 @@ extern stack_err_e stack_peek(const stack_t *stack_p,
  *     for decrementing the reference count using stack_free().
  * @retval STACK_E_INVALID
  *     Invalid stack.
- * @retval STACK_E_MAXREF
+ * @retval STACK_E_MAX_REFCOUNT
  *     Stack already has the maximum number of references. 
  * @see
  *     stack_alloc(), stack_get_refcount(), stack_free(),
