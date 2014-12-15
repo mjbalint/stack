@@ -4,6 +4,11 @@
  *
  * A stack is a basic collection with last-in, first-out LIFO behavior.
  *
+ * This stack API represents a stack that stores a copy of the data for each
+ * of its entries. It supports entries of different sizes. This makes it
+ * suitable for use cases such as a process stack in which the goal is to
+ * place mixed data together.   
+ *
  * @author     Matthew Balint, mjbalint@gmail.com
  * @date       November 2014
  * @copyright

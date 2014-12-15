@@ -1,13 +1,79 @@
 /**
  * @file
- * Interactive test driver for stack library.
+ * Interactive stack command. 
  *
- * @author Matthew Balint, mbalint@gmail.com
- * @date November 2014
+ * This command creates a simple interactive shell that allows the user
+ * manipulate a single stack. The shell supports the following commands:
  *
- * @par Copyright
- * Copyright (c) 2014 by Matthew Balint
- * All rights reserved.
+ * <ul>
+ *   <li><b>push</b> <i><string></i> -- Push a string onto the stack.
+ *   <li><b>pop</b> -- Remove string from top of stack. 
+ *   <li><b>peek</b> -- Look at top string without removing it.
+ *   <li><b>show</b> -- Show current contents of stack.
+ *   <li><b>help</b> -- Show command list.
+ *   <li><b>size</b> -- Report number of items in stack.
+ *   <li><b>quit</b> -- Exit shell
+ * </ul>
+ *
+ * @par Design
+ * The command makes use of the libstack.so shared library that is the
+ * core of the https://github.com/mbjalint/stack repository. It uses the
+ * include/stack.h interface to create an manipulate a single global stack. 
+ *
+ * The push command converts the rest of the line into a string and copies
+ * it into the stack. In this way, we can test the variable-length data
+ * portion of the include/stack.h interface.
+ *
+ * The shell uses a simple, single-keyword parser. It implements first
+ * unique match semantics and is case-insensitive. For example, any of
+ * 'q', 'qu', 'qui', 'quit', 'Q', 'QU', 'QUI' or 'QUIT' will exit the shell
+ * since there are no other commands that start with 'q'. The parser will
+ * not match commands with extra characters, such as 'quitX'. There are several
+ * commands starting with 'p' so either 'p' or 'P' will report an insufficient
+ * match. 'pu', 'po' and 'pe' will all be accepted.
+ *
+ * The parser uses a simple array of commands to determine the legal keywords
+ * and associated callback functions. New commands can be added to the shell
+ * by adding extra entries into the array.
+ * 
+ * @par Limitations
+ * <ol>
+ *    <li>Command always runs interactive mode so there is limited support
+ *        for i/o redirection and command chaining.
+ *    <li>Parser is serviceable for this simple program but would need
+ *        extensive re-architecture to do anything fancy (deep keyword
+ *        hierarchies, inline validation, typed inputs, etc). It would
+ *        probably be best to make use of third-party parser library. 
+ *    <li>Only one stack.
+ *    <li>'show' command currently dumps contents of stack using the
+ *         stack_print() debug function so it includes lots of internal
+ *         details and shows the strings as a hex-dump. Should be replaced
+ *         with a more friendly format.
+ * </ol>
+ * 
+ *
+ *
+ * @author     Matthew Balint, mjbalint@gmail.com
+ * @date       November 2014
+ * @copyright
+ *     Copyright (c) 2014 by Matthew Balint.
+ *
+ *     This file is part of https://github.com/mjbalint/stack
+ *
+ *     https://github.com/mjbalint/stack is free software: you can
+ *     redistribute it and/or modify it under the terms of the
+ *     GNU Lesser Public License as published by the
+ *     Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     https://github.com/mjbalint/stack is distributed in the hope that it
+ *     will be useful, but WITHOUT ANY WARRANTY; without even the implied
+ *     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ *     See the GNU Lesser Public License for more details.
+ *
+ *     You should have received a copy of the GNU Lesser Public License
+ *     along with https://github.com/mjbalint/stack.  If not,
+ *     see <http://www.gnu.org/licenses/>. 
  */
 
 #include "../include/stack.h"
@@ -301,11 +367,11 @@ static bool stack_cmd_parse_line (void)
     bool match[STACK_CMD_NUM_COMMANDS];          /* Command match status      */
     int  c        = EOF;                         /* Current character         */
     char cmd[128] = "";                          /* Command string so far     */
-    int  cmd_pos  = -1;                          /* Position in command string*/
+    unsigned int  cmd_pos  = 0;                          /* Position in command string*/
     int  num_matches = 0;                        /* # Matching commands so far*/
     stack_cmd_command_t *command_p    = NULL;    /* Current command           */
     char args[128] = "";                         /* Argument string           */
-    int  args_pos = -1;                          /* Position in argument str  */
+    unsigned int args_pos = 0;                          /* Position in argument str  */
     bool is_continue = true;                     /* Continue to next line?    */
     unsigned int i = 0;                          /* Loop index counter        */
 
@@ -332,32 +398,38 @@ static bool stack_cmd_parse_line (void)
         }
     }
 
+    /*
+     * Start by treating all possible commands as matches.
+     * We will eliminate possiblities with each input character.
+     */
     memset(match, true, sizeof(match));
     num_matches = STACK_CMD_NUM_COMMANDS;
     cmd_pos = 0;    
     for (;;) {
         /*
-         * Store next command.
+         * Truncate command if we run out of buffer space to store it,
+         * otherwise add next character to command and see update the
+         * match list.
          */
-        cmd[cmd_pos] = c;
+        if (cmd_pos < sizeof(cmd)) {
+            cmd[cmd_pos] = c;
 
-        /*
-         * Update match list. 
-         */
-        if (num_matches > 0) {
-            for (i = 0; i < STACK_CMD_NUM_COMMANDS; i++) {
-                if (match[i]) {
-                    command_p = &(g_stack_cmd_commands[i]);
-                    if (toupper(command_p->name[cmd_pos]) != toupper(c)) {
-                        match[i] = false;
-                        num_matches--;
+            if (num_matches > 0) {
+                for (i = 0; i < STACK_CMD_NUM_COMMANDS; i++) {
+                    if (match[i]) {
+                        command_p = &(g_stack_cmd_commands[i]);
+                        if ((cmd_pos >= (strlen(command_p->name))) ||
+                            (toupper(command_p->name[cmd_pos]) != toupper(c))) {
+                            match[i] = false;
+                            num_matches--;
+                        }
                     }
                 }
             }
         }
 
         /*
-         * Continue until we reach end command word.
+         * Continue until we reach end of command word.
          */
         cmd_pos++;
         c = getchar();
@@ -377,8 +449,15 @@ static bool stack_cmd_parse_line (void)
     }
     args_pos = 0;
     while ((c != '\n') && (c != EOF)) {
-        args[args_pos] = c;
-        args_pos++;
+        /*
+         * Truncate argument if we run out of buffer space to store it.
+         * Otherwise, add the next character to the argument.
+         */
+        if (args_pos < sizeof(args)) {
+            args[args_pos] = c;
+            args_pos++;
+        }
+
         c = getchar();
     }
     args[args_pos] = '\0';
