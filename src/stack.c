@@ -12,7 +12,7 @@
  * a fixed-length 'size' field and a variable-length 'data' field.
  *
  * Entries grow from the END of the buffer. This is a little counter-intuitive
- * but I think that it makes the code* easier to read since the top-of-stack is
+ * but I think that it makes the code easier to read since the top-of-stack is
  * reachable by just adding the amount of free buffer space to the pointer
  * to the beginning of the buffer, e.g.,
  *
@@ -46,11 +46,8 @@
  *
  * @par Limitations
  *    We are currently ignoring the stack configuration parameters and instead
- *    use a fixed-size buffer. We will add support for the configuration in
+ *    use a fixed-size buffer. We will add support for configuration in
  *    a future update.
- *
- *    We could support 0-length entries in this implementation but they are
- *    not allowed by the current version of the stack interface.
  *
  *    We use size_t for the size fields, which is necessary for enormous
  *    entries but is overkill for stacks which contain mostly small entries.
