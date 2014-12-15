@@ -31,3 +31,9 @@
 # Editor swap files
 *.swp
 *.swo
+
+# Log files
+*.log
+
+# Dependency files
+*.d

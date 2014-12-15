@@ -22,7 +22,7 @@
  *     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  *     See the GNU Lesser Public License for more details.
  *
- *     You should have received a copy of the GNU General Public License
+ *     You should have received a copy of the GNU Lesser Public License
  *     along with https://github.com/mjbalint/stack.  If not,
  *     see <http://www.gnu.org/licenses/>. 
  */
@@ -89,7 +89,7 @@ typedef enum {
  * @retval false
  *     Stack operation return code is invalid.
  */
-bool stack_err_e_is_valid (stack_err_e err)
+static inline bool stack_err_e_is_valid (stack_err_e err)
 {
     return ((err >= 0) && (err < STACK_NUM_ERR));
 }
@@ -142,7 +142,7 @@ typedef struct stack_ stack_t;
  *     This check will identify obviously incorrect stacks, such as NULL
  * stacks, but will not be able to identify all cases of corruption.
  */
-extern bool stack_is_valid(stack_t *stack_p);
+extern bool stack_is_valid(const stack_t *stack_p);
 
 /**
  * Special value indicating that the stack enforces no maximum on the
@@ -228,14 +228,14 @@ static inline stack_t* stack_alloc (void)
 extern size_t stack_get_num_entries(stack_t *stack_p);
 
 /**
- * Determine whether or not stack has any entries. 
+ * Determine whether or not stack has any entries.
  *
  * @param[in] stack_p
  *     Stack to query. Invalid stacks are treated as empty.
  */
 static inline bool stack_is_empty(stack_t *stack_p)
 {
-    return (0 == stack_get_size(stack_p));
+    return (0 == stack_get_num_entries(stack_p));
 }
 
 /**
@@ -244,8 +244,7 @@ static inline bool stack_is_empty(stack_t *stack_p)
  * @param[in] stack_p
  *     Stack to update.
  * @param[in] entry_p
- *     Entry to copy to top of stack. An entry must be at least 1 byte
- *     in size.
+ *     Entry to copy to top of stack.
  * @param[in] entry_size
  *     Size of entry in bytes. 
  * @retval STACK_E_OK
@@ -262,7 +261,7 @@ static inline bool stack_is_empty(stack_t *stack_p)
  *     stack_peek(), stack_pop()
  */
 extern stack_err_e stack_push(stack_t *stack_p,
-                              void *entry_p,
+                              const void *entry_p,
                               size_t entry_size);
 
 /**
@@ -376,12 +375,20 @@ extern void stack_free(stack_t *stack_p);
  * @see
  *     stack_free()
  */
-static inline stack_free_and_clear(stack_t **stack_pp)
+static inline void stack_free_and_clear(stack_t **stack_pp)
 {
     if (NULL != stack_pp) {
         stack_free(*stack_pp);
         *stack_pp = NULL;
     }
 }
+
+/**
+ * Print contents of stack to STDOUT.
+ *
+ * @param[in] stack_p
+ *     Stack to print. A suitable message will be displayed for invalid stacks.
+ */
+extern void stack_print(stack_t *stack_p);
 
 #endif /* __STACK_H__ */

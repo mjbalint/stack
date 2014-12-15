@@ -5,28 +5,43 @@
  * A stack is a basic collection with last-in, first-out LIFO behavior.
  *
  * This implemetation stores a copy of the data for each entry in a buffer.
- * It supports entries of variable size. 
+ * It supports entries of variable size.
  *
  * @par Design
- * The following diagram shows the layout of the stack's buffer. Entries
- * are stored as (size, data) tuples, with a fixed-size size field followed
- * by a variable sized data field.
+ * Stack entries are stored in a contiguous buffer. Each entry consists of
+ * a fixed-length 'size' field and a variable-length 'data' field.
+ *
+ * Entries grow from the END of the buffer. This is a little counter-intuitive
+ * but I think that it makes the code* easier to read since the top-of-stack is
+ * reachable by just adding the amount of free buffer space to the pointer
+ * to the beginning of the buffer, e.g.,
+ *
+ * <code>
+ *     size_t *top_entry_size_p = stack_p->buf + stack_p->buf_free_size;
+ * <endcode>
+ *
+ * The following diagram shows the layout of the stack's buffer for a sample
+ * stack with just a few entries. Unused buffer space is shown as '_', 
+ * space occupied with a 'size' field is shown as 'S' and space occupied by
+ * data is shown as 'd'. Notice that the 'data' fields may be smaller,
+ * larger or the same size as the 'size' fields. 
  *  
  *
  *                      
- *                  ,-- Top-of-stack pointer
+ *                  ,-- Top-of-stack
  *                  |
  *                  V
  * [________________SSSSdddddddddSSSSddSSSSdddd]
- *  ^               ^   ^        ^   ^ ^   ^
- *  |               |   |        |   | |   |
- *  |               |   |        |   | |   |
- *  |               |   |        |   | |   `- Data for last entry in stack
- *  |               |   |        |   | `- Size of last entry in stack
- *  |               |   |        |   `- Data for next (2nd) entry in stack
- *  |               |   |        `- Size of next (2nd) entry in stack
- *  |               |   `- Data for top entry in stack. 
- *  |               `- Size of top entry in stack
+ *  ^              ^^   ^        ^   ^ ^   ^
+ *  |              ||   |        |   | |   |
+ *  |              ||   |        |   | |   |
+ *  |              ||   |        |   | |   `- Data for last entry in stack
+ *  |              ||   |        |   | `- Size of last entry in stack
+ *  |              ||   |        |   `- Data for next (2nd) entry in stack
+ *  |              ||   |        `- Size of next (2nd) entry in stack
+ *  |              ||   `- Data for top entry in stack. 
+ *  |              | `- Size of top entry in stack
+ *  |              `- End of free buffer space
  *  `- Start of free buffer space
  *
  * @par Limitations
@@ -43,7 +58,6 @@
  *    use a smaller integer type when possible. This would reduce overhead
  *    for stacks with lots of small entries at the expense of those with
  *    fewer large entries. 
- *
  *
  * @author     Matthew Balint, mjbalint@gmail.com
  * @date       November 2014
@@ -63,13 +77,14 @@
  *     warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  *     See the GNU Lesser Public License for more details.
  *
- *     You should have received a copy of the GNU General Public License
+ *     You should have received a copy of the GNU Lesser Public License
  *     along with https://github.com/mjbalint/stack.  If not,
  *     see <http://www.gnu.org/licenses/>. 
  */
 
 #include "../include/stack.h"
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -100,7 +115,7 @@ const char* stack_err_e_to_string (stack_err_e err)
      * We will use the enumeration value as an index into the conversion array,
      * so first make sure that it is within bounds. 
      */
-    if (stack_err_e_is_valid(err)) {
+    if (! stack_err_e_is_valid(err)) {
         return (STACK_ERR_UNKNOWN_STR);
     }
 
@@ -134,12 +149,11 @@ struct stack_ {
     /**
      * Stack element buffer.
      */
-    char buf[1024];
+    unsigned char buf[1024];
     /**
-     * Start of top entry in stack. Each entry consists of the size of the
-     * the user data followed by the user data itself. 
+     * Amount of free space in buffer.
      */
-    size_t *top_entry_size_p;
+    size_t buf_free_size;
     /**
      * Number of entries in the stack.
      */
@@ -155,7 +169,7 @@ struct stack_ {
  *
  * See ../include/stack.h for API details.
  */
-bool stack_is_valid (stack_t *stack_p)
+bool stack_is_valid (const stack_t *stack_p)
 {
     return ((NULL != stack_p) && (stack_p == stack_p->self)); 
 }
@@ -165,10 +179,10 @@ bool stack_is_valid (stack_t *stack_p)
  *
  * See ../include/stack.h for API details. 
  */
-stack_t* stack_alloc_custom (size_t max_entries,
-                             size_t max_entry_size,
-                             size_t default_entry_size,
-                             size_t max_size)
+stack_t* stack_alloc_custom (__attribute__((unused)) size_t max_entries,
+                             __attribute__((unused)) size_t max_entry_size,
+                             __attribute__((unused)) size_t default_entry_size,
+                             __attribute__((unused)) size_t max_size)
 {
     stack_t *new_stack_p = NULL;                 /* Newly allocated stack     */
 
@@ -178,10 +192,10 @@ stack_t* stack_alloc_custom (size_t max_entries,
     }
 
     /*
-     * Initialize the stack. Since there are no entries, the values in the
-     * data fields don't matter and we don't need to set them.
+     * Initialize the stack.
      */
     new_stack_p->num_entries = 0;
+    new_stack_p->buf_free_size = sizeof(new_stack_p->buf);
     new_stack_p->refcount = 1;
     new_stack_p->self = new_stack_p;
 
@@ -210,15 +224,116 @@ size_t stack_get_num_entries (stack_t *stack_p)
  *     already been validated.
  *
  * @param[in] stack_p
- *     Stack to query. MUST BE A VALID STACK otherwise results are indeterminate.
+ *     Stack to query. MUST BE A VALID STACK otherwise results are
+ *     indeterminate.
  * @retval true
  *     Stack has no entries.
  * @retval false
  *     Stack has at least one entry.
  */
-static inline bool stack_is_empty_impl (stack_t *stack_p)
+static inline bool stack_is_empty_impl (const stack_t *stack_p)
 {
     return (stack_p->num_entries < 1);
+}
+
+/**
+ * Get top entry in stack. 
+ *
+ * @note
+ *     This is a private implementation for use with stacks that have
+ *     already been validated.
+ *
+ * @param[in] stack_p
+ *     Stack to query. MUST BE A VALID, NON-EMPTY STACK otherwise results
+ *     are indeterminate.
+ * @param[out] size_pp
+ *     If not NULL, will be updated with pointer to
+ *     'size' field of top entry in stack. Pointer is valid only until
+ *     next stack_push() or stack_pop() operation. 
+ * @param[out] data_pp
+ *     If not NULL, will be updated with pointer to
+ *     'data' field of top entry in stack. Pointer is valid only until
+ *     next stack_push() or stack_pop() operation. 
+ */
+static void stack_get_top_entry (const stack_t *stack_p,
+                                 size_t **size_pp,
+                                 void **data_pp)
+{
+    /*
+     * The top entry in the stack is located immediately after the
+     * the free portion of the buffer.
+     *
+     * The fixed-length 'size' field is first, followed by the
+     * variable-length 'data' field.
+     */
+    if (NULL != size_pp) {
+        *size_pp = (size_t *)(stack_p->buf + stack_p->buf_free_size);
+    }
+    if (NULL != data_pp) {
+        *data_pp =
+            (void *)(stack_p->buf + stack_p->buf_free_size + sizeof(size_t));
+    }
+}
+
+/**
+ * Get top entry in stack. 
+ *
+ * @note
+ *     This is a private implementation for use with stacks that have
+ *     already been validated.
+ *
+ * @param[in] stack_p
+ *     Stack to query.
+ *
+ *     MUST BE A VALID, NON-EMPTY STACK otherwise results are indeterminate.
+ * @param[in,out] size_pp
+ *     Initially, set to point to 'size' field of current entry in stack,
+ *     either from  stack_get_top_entry() or stack_get_next_entry().
+ *     On success, will be set to point to 'size' field of next entry in stack,
+ *     otherwise will be set to NULL.
+ *
+ *     MUST BE VALID, otherwise results are indeterminate.
+ * @param[in,out] data_pp
+ *     Initially, set to point to 'data' field of current entry in stack,
+ *     either from stack_get_top_entry() or stack_get_next_entry().
+ *     On success, will be set to point to 'data' field of next entry in stack,
+ *     otherwise will be set to NULL.
+ *
+ *     MUST BE VALID, otherwise results are indeterminate.
+ * @retval true
+ *     Successfully retrieved next entry
+ * @retval false
+ *     Failed to retrieve next entry.
+ */
+static bool stack_get_next_entry (const stack_t *stack_p,
+                                  size_t **size_pp,
+                                  void **data_pp)
+{
+    size_t *entry_size_p = NULL;                 /* Next entry's 'size' field */
+
+    if (NULL == *size_pp) {
+        *data_pp = NULL;
+        return (false);
+    }
+    if (NULL == *data_pp) {
+        *size_pp = NULL;
+        return (false); 
+    }
+
+    /*
+     * The next entry in the stack is located 'size' bytes after the
+     * data pointer. Make sure that this isn't past the end of the buffer. 
+     */
+    entry_size_p = (size_t *)((unsigned char *)(*data_pp) + **size_pp);
+    if ((unsigned char *)entry_size_p > (stack_p->buf + sizeof(stack_p->buf))) {
+        *size_pp = NULL;
+        *data_pp = NULL;
+        return (false);
+    }
+    *size_pp = entry_size_p;
+    *data_pp = (void *)((unsigned char *)entry_size_p + sizeof(size_t));
+
+    return (true);
 }
 
 /*
@@ -226,11 +341,12 @@ static inline bool stack_is_empty_impl (stack_t *stack_p)
  * 
  * See ../include/stack.h for API details.
  */
-stack_err_e stack_push (stack_t *stack_p, void *entry_p, size_t entry_size)
+stack_err_e stack_push (stack_t *stack_p,
+                        const void *entry_p, 
+                        size_t entry_size)
 {
     size_t *buf_entry_size_p = NULL;                 /* Entry size in buffer  */
     void   *buf_entry_p      = NULL;                 /* Entry in buffer       */
-    size_t  free_buf_size    = 0;                    /* Free stack space left */
     size_t  new_entry_size   = 0;                    /* Total new entry space */
 
     /*
@@ -239,54 +355,33 @@ stack_err_e stack_push (stack_t *stack_p, void *entry_p, size_t entry_size)
     if (! stack_is_valid(stack_p)) {
         return (STACK_E_INVALID);
     }
-    if (NULL == entry_p) {
-        return (STACK_E_INVALID);
-    }
-    if (entry_size < 1) {
+    if ((NULL == entry_p) && (entry_size > 0)) { 
         return (STACK_E_INVALID);
     }
 
     /*
-     * Make sure that there is enough space left in the buffer for the new entry.
+     * Make sure that there is enough space left in the buffer for the new
+     * entry.
      */
-    free_buf_size = stack_p->top_entry_size_p - buf; 
     new_entry_size = sizeof(size_t) + entry_size;
-    if (new_entry_size > free_buf_size) {
+    if (new_entry_size > stack_p->buf_free_size) {
         return (STACK_E_FULL);
     }
 
     /*
-     * Find the start of the new entry in the buffer.
+     * Reserve space for the new entry.
      */
-    if (stack_is_empty_impl(stack_p)) {
-        /*
-         * This is the first entry; place it at the end of the buffer.
-         */
-        buf_entry_size_p = (size_t *)(buf + sizeof(buf) - new_entry_size);
-    } else {
-        /*
-         * Place this entry before the current top entry.
-         *
-         * To get to the beginning of the new top entry, we start at the 
-         * beginning of the current top entry and skip over the size and data
-         * fields. The size field is a fixed size and the data field bytes
-         * come from the size field's value. 
-         */
-        buf_entry_size_p = stack_p->top_entry_size_p - new_entry_size; 
-    }
+    stack_p->num_entries++;
+    stack_p->buf_free_size -= new_entry_size;
 
     /*
      * Copy data for entry into buffer 
      */
+    stack_get_top_entry(stack_p, &buf_entry_size_p, &buf_entry_p);
     *buf_entry_size_p = entry_size;
-    buf_entry_p = buf_entry_size_p + sizeof(size_t);
-    memcpy(buf_entry_p, entry_p, entry_size);
-
-    /*
-     * New entry is ready so we can now update the stack content fields.
-     */
-    stack_p->top_entry_size_p = buf_entry_size_p;
-    stack_p->num_entries++;
+    if (entry_size > 0) {
+    	memcpy(buf_entry_p, entry_p, entry_size);
+    }
 
     return (STACK_E_OK);
 }
@@ -298,7 +393,7 @@ stack_err_e stack_push (stack_t *stack_p, void *entry_p, size_t entry_size)
  */
 stack_err_e stack_pop (stack_t *stack_p, void *entry_p, size_t *entry_size_p)
 {
-    stack_err_e err = STACK_E_OK;                /* Operation return code     */
+    stack_err_e  err = STACK_E_OK;               /* Operation return code     */
 
     /*
      * First copy value from top of stack. 
@@ -311,21 +406,8 @@ stack_err_e stack_pop (stack_t *stack_p, void *entry_p, size_t *entry_size_p)
     /*
      * Remove entry from stack.
      */
+    stack_p->buf_free_size += sizeof(size_t) + *entry_size_p;
     (stack_p->num_entries)--;
-    if (stack_is_empty_impl(stack_p)) {
-        /*
-         * The top pointer is not used for empty stacks, but we set it to NULL
-         * for safety.
-         */
-        stack_p->top_entry_size_p = NULL;
-    } else {
-        /*
-         * Skip over fixed size field and variable data field to reach
-         * beginning of next entry in the stack. 
-         */
-        stack_p->top_entry_size_p +=
-            sizeof(size_t) + *(stack_p->top_entry_size_p);
-    }
 
     return (STACK_E_OK);
 }
@@ -339,12 +421,13 @@ stack_err_e stack_peek (const stack_t *stack_p,
                         void *entry_p,
                         size_t *entry_size_p)
 {
-    size_t  in_entry_size  = 0;                  /* Output data buffer size   */
-    size_t  out_entry_size = 0;                  /* Stack entry data size     */
-    void   *buf_entry_p    = NULL;               /* Entry in buffer           */
+    size_t  in_entry_size    = 0;                /* Output data buffer size   */
+    size_t  out_entry_size   = 0;                /* Stack entry data size     */
+    size_t *buf_entry_size_p = NULL;             /* Entry size in buffer      */
+    void   *buf_entry_p      = NULL;             /* Entry in buffer           */
 
     /*
-     * Check inputs.
+     * Check parameters.
      */
     if (! stack_is_valid(stack_p)) {
         return (STACK_E_INVALID);
@@ -352,7 +435,7 @@ stack_err_e stack_peek (const stack_t *stack_p,
     if (NULL == entry_size_p) {
         return (STACK_E_INVALID);
     }
-    if (NULL != entry) {
+    if (NULL != entry_p) {
         /*
          * If an output buffer is supplied, it must have at least one byte.
          */
@@ -365,18 +448,21 @@ stack_err_e stack_peek (const stack_t *stack_p,
     /*
      * Nothing to do for empty stacks.
      */
-    if (stack_p->num_entries < 1) {
+    if (stack_is_empty_impl(stack_p)) {
         return (STACK_E_EMPTY);
     }
 
     /*
      * Copy data for entry from buffer. 
      */
-    out_entry_size = *(stack_p->top_entry_size_p);
-    if (out_entry_size > in_entry_size) {
-        return (STACK_E_BUF_OVERFLOW);
+    stack_get_top_entry(stack_p, &buf_entry_size_p, &buf_entry_p);
+    out_entry_size = *buf_entry_size_p;
+    if ((out_entry_size > 0) && (NULL != entry_p)) {
+        if (out_entry_size > in_entry_size) {
+            return (STACK_E_BUF_OVERFLOW);
+        }
+        memcpy(entry_p, buf_entry_p, out_entry_size);
     }
-    memcpy(entry_p, buf_entry_p, out_entry_size);
     *entry_size_p = out_entry_size;
 
     return (STACK_E_OK);
@@ -432,4 +518,72 @@ void stack_free (stack_t *stack_p)
     if (0 == stack_p->refcount) {
         free(stack_p);
     }
+}
+
+/*
+ * Print content of stack to STDOUT.
+ *
+ * See ../include/stack.h for API details.
+ */
+void stack_print (stack_t *stack_p)
+{
+    size_t        *entry_size_p = NULL;          /* Stack entry 'size' field  */
+    size_t         entry_size   = 0;             /* Stack entry data size     */
+    unsigned char *entry_data_p = NULL;          /* Stack entry 'data' field  */
+    unsigned int   i,j;                          /* Loop index counter        */
+
+    /*
+     * Print an abbreviated entry for invalid stacks.
+     */
+    if (! stack_is_valid(stack_p)) { 
+        printf("<stack ptr=%p valid=false></stack>\n", stack_p);
+    }
+
+    /*
+     * Print header containing stack control data
+     */
+    printf("<stack ptr=%p refs=%u entries=%lu used_bytes=%lu "
+             "avail_bytes=%lu>\n",
+           stack_p,
+           stack_p->refcount,
+           stack_p->num_entries,
+           sizeof(stack_p->buf) - stack_p->buf_free_size,
+           stack_p->buf_free_size);
+
+    /*
+     * Print each entry in the stack.
+     */
+    if (! stack_is_empty_impl(stack_p)) {
+	stack_get_top_entry(stack_p, &entry_size_p, (void **)&entry_data_p);
+
+    	for (i = 0; i < stack_p->num_entries; i++) {
+            if (NULL == entry_size_p) {
+                printf("  <stack_entry ptr=NULL></stack_entry>\n");
+                break;
+            }
+
+            entry_size = *entry_size_p;
+            printf("  <stack_entry ptr=%p size=%lu",
+                   entry_size_p, entry_size);
+            if (entry_size > 0) {
+                printf(" data=");
+                for (j = 0; j < entry_size; j++) {
+                    if (j > 0) {
+                        printf(":");
+                    }
+                    printf("%02X", entry_data_p[j]);
+                }
+            }
+            printf("></stack_entry>\n");
+
+            (void)stack_get_next_entry(stack_p,
+                                       &entry_size_p,
+                                       (void **)&entry_data_p);
+        }
+    }
+
+    /*
+     * Print footer.
+     */
+    printf("</stack>\n");
 }
